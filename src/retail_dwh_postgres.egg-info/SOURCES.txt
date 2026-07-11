@@ -1,0 +1,6 @@
+pyproject.toml
+src/retail_dwh_postgres.egg-info/PKG-INFO
+src/retail_dwh_postgres.egg-info/SOURCES.txt
+src/retail_dwh_postgres.egg-info/dependency_links.txt
+src/retail_dwh_postgres.egg-info/top_level.txt
+src/retaildwh/__init__.py

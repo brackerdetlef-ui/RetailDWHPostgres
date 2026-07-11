@@ -1,0 +1,7 @@
+[project]
+name = "retail-dwh-postgres"
+version = "0.1.0"
+description = "Retail Data Warehouse für PostgreSQL"
+requires-python = ">=3.10"
+
+dependencies = []

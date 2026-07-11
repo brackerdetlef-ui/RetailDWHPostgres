@@ -1,0 +1,69 @@
+project:
+  name: RetailDWHPostgres
+  version: 0.1.0
+  environment: development
+
+paths:
+  csv_source: ~/Projekte/RetailDWGen/output
+  archive: ./archive
+  logs: ./logs
+  sql: ./sql
+
+database:
+
+  # VORSICHT: Die Zugangsdaten nicht hier definieren!
+  # Sie werden über die .env im Hauptverzeichnis inkludiert 
+  # Die .env wird nicht an git mit übergeben, so in .gitignore fest gelegt!
+
+  host: POSTGRES_HOST
+  port: POSTGRES_PORT
+  database: POSTGRES_DATABASE
+  user: POSTGRES_USER
+  password: POSTGRES_PASSWORD
+
+  # ------------------------------------------------------------
+  # Datenbankschemas des Retail Data Warehouse
+  #
+  # raw          : Unveränderte Übernahme der Quelldaten
+  #                (CSV, ERP, API usw.). Es erfolgen keinerlei
+  #                Transformationen. Dieses Schema wird ausschließlich
+  #                vom Loader beschrieben.
+  #
+  # stage        : Technische Aufbereitung der Rohdaten.
+  #                Datentypen, Feldnamen, Formate und Qualitäts-
+  #                prüfungen werden vereinheitlicht.
+  #                Dieses Schema wird ausschließlich von dbt erzeugt.
+  #
+  # intermediate : Wiederverwendbare fachliche Zwischenergebnisse.
+  #                Komplexe Joins, Berechnungen und Aggregationen,
+  #                die von mehreren Modellen genutzt werden.
+  #                Dieses Schema wird ausschließlich von dbt erzeugt.
+  #
+  # mart         : Fachliches Data-Warehouse-Modell.
+  #                Enthält Dimensionen, Faktentabellen und weitere
+  #                Auswertungsmodelle für Reporting, BI und Analysen.
+  #                Dieses Schema wird ausschließlich von dbt erzeugt.
+  #
+  # control      : Steuerungs- und Monitoringdaten.
+  #                Enthält Ladehistorie, Jobstatus, Scheduler-
+  #                Informationen, Fehlerprotokolle und Metadaten.
+  #                Dieses Schema wird vom Loader und der
+  #                Orchestrierung (Dagster) verwendet.
+  # ------------------------------------------------------------
+
+  schema_raw: raw
+  schema_stage: stage
+  schema_intermediate: intermediate
+  schema_mart: mart
+  schema_control: control
+
+loader:
+  mode: copy
+  truncate_before_load: false
+  archive_after_load: true
+  delimiter: ","
+  encoding: utf-8
+  header: true
+
+logging:
+  level: INFO
