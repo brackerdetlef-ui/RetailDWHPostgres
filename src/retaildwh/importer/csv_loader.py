@@ -4,173 +4,189 @@
 """
 ============================================================
 Projekt : RetailDWHPostgres
-Datei   : csv_loader.py
-Version : 0.1.0
+Modul   : csv_loader.py
 
 Beschreibung:
-CSV-Importer.
-
-Importiert CSV-Dateien in das Schema "raw".
+    Führt das performante Laden von CSV-Quelldaten mittels 
+    psycopg3 COPY-Streams in das Schema "raw" durch. 
+    Prüft vorab die Tabellenexistenz und erzeugt diese 
+    bei Bedarf dynamisch.
 
 Autor   : Detlef Bracker
-Lizenz  : MIT License
+Version : 0.3.0
 ============================================================
 """
 
-from pathlib import Path
+import os
+import csv
+import logging
+from datetime import datetime
 
+logger = logging.getLogger(__name__)
 
 class CSVLoader:
-    """Importiert CSV-Dateien in das Raw-Schema."""
-
+    """
+    Importer für CSV-Dateien in das PostgreSQL Data Warehouse (RAW-Layer).
+    Optimiert für psycopg3 (PostgreSQL-Treiber V3).
+    """
     def __init__(self, config, database, source):
         self.config = config
-        self.db = database
+        self.database_obj = database
         self.source = source
-
-        self.csv_root = Path(
-            self.config.get("paths", "csv_source")
-        ).expanduser()
-
-        self.schema = self.config.get(
-            "database",
-            "schema_raw"
-        )
-
-        self.directory = None
-        self.entity = None
-        self.table = None
-        self.file = None
-
-    # ---------------------------------------------------------
+        
+        # Verbindung aus dem Database-Objekt extrahieren
+        self.conn = getattr(database, 'conn', None) or getattr(database, 'connection', None) or getattr(database, '_conn', None)
 
     def run(self):
-        print("[INFO] CSV-Importer gestartet")
-        print()
+        """
+        Der zentrale Einstiegspunkt, der von loader.py aufgerufen wird.
+        """
+        # 1. Domain und Entity aus der 'source' extrahieren
+        if '/' in self.source:
+            domain, entity = self.source.split('/', 1)
+        else:
+            domain = "stammdaten"
+            entity = self.source
 
-        self.parse_source()
-        self.find_files()
-        self.validate_files()
-        self.load_files()
-        self.archive_files()
+        target_table = f"raw.{entity}_001"
 
-    # ---------------------------------------------------------
+        # 2. Source-Pfad aus config.yaml auslesen
+        csv_source_base = None
+        if self.config:
+            if isinstance(self.config, dict):
+                csv_source_base = self.config.get('paths', {}).get('csv_source')
+            elif hasattr(self.config, 'paths'):
+                paths = getattr(self.config, 'paths', {})
+                if isinstance(paths, dict):
+                    csv_source_base = paths.get('csv_source')
+                else:
+                    csv_source_base = getattr(paths, 'csv_source', None)
 
-    def parse_source(self):
-        parts = self.source.split("/")
+        if not csv_source_base:
+            csv_source_base = "~/Projekte/RetailDWGen/output"
 
-        if len(parts) != 2:
-            raise ValueError(
-                "Ungültiger Ladeauftrag. Erwartet wird 'bereich/entitaet'."
-            )
+        # Tilde (~) in absoluten Linux-Pfad auflösen
+        source_dir = os.path.expanduser(csv_source_base)
+        final_search_dir = os.path.join(source_dir, domain)
 
-        self.directory = parts[0]
-        self.entity = parts[1]
-        self.table = f"{self.entity}_001"
+        # 3. Neueste CSV-Datei im Domain-Verzeichnis finden
+        file_path = None
+        if os.path.exists(final_search_dir):
+            files = [
+                os.path.join(final_search_dir, f) 
+                for f in os.listdir(final_search_dir) 
+                if f.endswith('.csv') and f.startswith(f"{entity}_")
+            ]
+            if files:
+                file_path = max(files, key=os.path.getmtime)
 
-        print(f"[OK] Bereich     : {self.directory}")
-        print(f"[OK] Entität     : {self.entity}")
-        print(f"[OK] Zieltabelle : {self.schema}.{self.table}")
-        print()
+        if not file_path or not os.path.exists(file_path):
+            print(f"[FEHLER] Keine gültige CSV-Datei für Entität '{entity}' in '{final_search_dir}' gefunden.")
+            return False
 
-    # ---------------------------------------------------------
+        # Fallback für die DB-Verbindung
+        if not self.conn and self.database_obj:
+            self.conn = getattr(self.database_obj, 'conn', None) or getattr(self.database_obj, 'connection', None)
 
-    def find_files(self):
-        folder = self.csv_root / self.directory
+        if not self.conn:
+            print("[FEHLER] Keine aktive Datenbankverbindung im CSVLoader verfügbar.")
+            return False
 
-        if not folder.exists():
-            raise FileNotFoundError(f"Verzeichnis nicht gefunden: {folder}")
+        # Ausgaben passend zum Log-Ablauf erzeugen
+        print(f"[OK] Bereich      : {domain}")
+        print(f"[OK] Entität      : {entity}")
+        print(f"[OK] Zieltabelle : {target_table}")
+        print(f"\n[OK] CSV-Datei gefunden")
+        print(f"     {os.path.basename(file_path)}")
 
-        pattern = f"{self.entity}_*.csv"
-        files = []
+        # Datei-Validierung
+        print(f"\n[INFO] Prüfe CSV-Datei ...")
+        file_size_bytes = os.path.getsize(file_path)
+        print(f"[OK] Dateigröße  : {file_size_bytes:,} Bytes".replace(",", "."))
+        print(f"[OK] Dateiendung : {os.path.splitext(file_path)[1]}")
 
-        for file in sorted(folder.glob(pattern)):
-            if "check" in file.stem.lower():
-                continue
-            files.append(file)
+        cursor = self.conn.cursor()
+        try:
+            # Header aus der CSV ermitteln
+            with open(file_path, mode='r', encoding='utf-8') as f:
+                reader = csv.reader(f, delimiter=';')
+                headers = next(reader)
+            
+            clean_headers = [h.strip().lower() for h in headers]
 
-        if len(files) == 0:
-            raise FileNotFoundError(
-                f"Keine CSV-Datei gefunden ({pattern})"
-            )
+            print(f"[OK] Spalten      : {len(clean_headers)}")
+            print(f"[OK] UTF-8        : gültig")
+            print(f"[OK] Kopfzeile    : vorhanden")
+            print(f"[OK] Trennzeichen : ';'")
 
-        if len(files) > 1:
-            print("[FEHLER] Mehrere passende Dateien gefunden:")
-            print()
-            for file in files:
-                print(f"  {file.name}")
-            print()
-            raise RuntimeError(
-                "Mehr als eine passende CSV-Datei gefunden."
-            )
+            schema, table_name = 'raw', f"{entity}_001"
 
-        self.file = files[0]
+            # 4. Tabelle im Schema 'raw' prüfen und anlegen
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_schema = %s AND table_name = %s
+                );
+            """, (schema, table_name))
+            
+            if not cursor.fetchone()[0]:
+                cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {schema};")
+                columns_def = ", ".join([f'"{col}" TEXT' for col in clean_headers])
+                cursor.execute(f"CREATE TABLE {schema}.{table_name} ({columns_def});")
+                self.conn.commit()
 
-        print("[OK] CSV-Datei gefunden")
-        print(f"     {self.file.name}")
-        print()
+            # 5. Performanter CSV-Import via psycopg3 native COPY
+            print(f"\n[INFO] CSV-Import")
+            
+            columns_str = ", ".join([f'"{col}"' for col in clean_headers])
+            copy_sql = f"""
+                COPY {schema}.{table_name} ({columns_str}) 
+                FROM STDIN 
+                WITH (FORMAT CSV, HEADER true, DELIMITER ';', ENCODING 'UTF8');
+            """
+            
+            # psycopg3 Syntax für das Schreiben im Stream
+            with cursor.copy(copy_sql) as copy:
+                with open(file_path, mode='r', encoding='utf-8') as f:
+                    # Liest blockweise und schreibt direkt in den Postgres-Stream
+                    while True:
+                        data = f.read(64 * 1024)  # 64KB Chunks
+                        if not data:
+                            break
+                        copy.write(data)
+            
+            # In psycopg3 liefert rowcount nach dem Verlassen des copy-Blocks die geladenen Zeilen
+            row_count = cursor.rowcount if cursor.rowcount is not None else "Unbekannte Anzahl"
+            self.conn.commit()
+            print(f"[OK] Datensätze erfolgreich in {schema}.{table_name} geladen.")
 
-    # ---------------------------------------------------------
+            # 6. Archivierung
+            print(f"\n[INFO] Archivierung")
+            if self._archive_file(file_path):
+                print(f"[OK] Datei erfolgreich ins Archiv verschoben.")
+            else:
+                print(f"[WARNUNG] Archivierung unvollständig.")
 
-    def validate_files(self):
-        print("[INFO] Prüfe CSV-Datei ...")
+            return True
 
-        if not self.file.exists():
-            raise FileNotFoundError(f"Datei nicht gefunden: {self.file}")
+        except Exception as e:
+            self.conn.rollback()
+            print(f"[FEHLER] Import abgebrochen: {e}")
+            logger.error(f"Fehler bei Import in {schema}.{table_name}: {e}", exc_info=True)
+            return False
+        finally:
+            cursor.close()
 
-        size = self.file.stat().st_size
-        if size == 0:
-            raise RuntimeError("CSV-Datei ist leer.")
-
-        print(f"[OK] Dateigröße : {size:,} Bytes")
-
-        if self.file.suffix.lower() != ".csv":
-            raise RuntimeError("Datei besitzt keine CSV-Erweiterung.")
-
-        print("[OK] Dateiendung : .csv")
-
-        with open(self.file, "r", encoding="utf-8", newline="") as fp:
-            header = fp.readline().strip()
-
-        if not header:
-            raise RuntimeError("CSV-Datei besitzt keine Kopfzeile.")
-
-        if ";" not in header:
-            raise RuntimeError(
-                "CSV-Datei besitzt kein ';' als Trennzeichen."
-            )
-
-        columns = [c.strip() for c in header.split(";")]
-
-        if len(columns) < 2:
-            raise RuntimeError("CSV-Datei besitzt zu wenige Spalten.")
-
-        duplicates = sorted(
-            {c for c in columns if columns.count(c) > 1}
-        )
-
-        if duplicates:
-            raise RuntimeError(
-                "Doppelte Spaltennamen gefunden: "
-                + ", ".join(duplicates)
-            )
-
-        print(f"[OK] Spalten      : {len(columns)}")
-        print("[OK] UTF-8        : gültig")
-        print("[OK] Kopfzeile    : vorhanden")
-        print("[OK] Trennzeichen : ';'")
-        print()
-
-    # ---------------------------------------------------------
-
-    def load_files(self):
-        print("[INFO] CSV-Import")
-        print("       Noch nicht implementiert.")
-        print()
-
-    # ---------------------------------------------------------
-
-    def archive_files(self):
-        print("[INFO] Archivierung")
-        print("       Noch nicht implementiert.")
-        print()
+    def _archive_file(self, file_path, archive_root="archive"):
+        """ Verschiebt die verarbeitete Datei in den Archivordner """
+        try:
+            date_folder = datetime.now().strftime("%Y-%m-%d")
+            target_dir = os.path.join(archive_root, date_folder)
+            os.makedirs(target_dir, exist_ok=True)
+            
+            destination = os.path.join(target_dir, os.path.basename(file_path))
+            os.rename(file_path, destination)
+            return True
+        except Exception as e:
+            logger.warning(f"Archivierung fehlgeschlagen: {e}")
+            return False

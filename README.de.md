@@ -1,247 +1,93 @@
-# RetailDWHPostgres
+Markdown# RetailDWHPostgres
 
 ## Projektbeschreibung
 
-RetailDWHPostgres ist ein Lern- und Referenzprojekt zum Aufbau eines modernen Data Warehouse auf Basis von PostgreSQL.
-
+RetailDWHPostgres ist ein Lern- und Referenzprojekt zum Aufbau eines modernen Data Warehouse auf Basis von PostgreSQL. 
 Das Projekt verfolgt das Ziel, eine Architektur zu entwickeln, die später mit möglichst wenigen Änderungen auch auf Cloud-Plattformen wie Snowflake oder Google BigQuery betrieben werden kann.
 
 Dabei werden ausschließlich etablierte Open-Source-Werkzeuge verwendet.
 
-Geplante Komponenten:
-
-* PostgreSQL
-* Python
-* dbt
-* Dagster
+**Geplante und eingesetzte Komponenten:**
+* PostgreSQL (v15+)
+* Python (v3.10+)
+* dbt (Data Build Tool)
+* Dagster (Orchestrierung)
 * Git / GitHub
 
 ---
 
-# Projektarchitektur
+## Datengrundlage & Kooperation
 
-Die Datenverarbeitung erfolgt nach dem ELT-Prinzip.
+Dieses Data Warehouse arbeitet nicht mit isolierten Beispieldaten, sondern ist direkt mit dem Schwesterprojekt **RetailDWGen** verzahnt. 
 
-```text
-CSV / Quelldaten
-        │
-        ▼
-      Loader
-        │
-        ▼
- PostgreSQL (raw)
-        │
-        ▼
-      dbt stage
-        │
-        ▼
-  dbt intermediate
-        │
-        ▼
-     dbt mart
-```
+* **Daten-Generator:** [RetailDWGen auf GitHub](https://github.com/brackerdetlef-ui/RetailDWGen/)
 
-Die Orchestrierung der einzelnen Verarbeitungsschritte erfolgt später über Dagster.
+Die dort erzeugten, realistischen Handelsdaten (Stammdaten wie Artikel, Kunden, Lieferanten sowie Transaktionsdaten) dienen als direkte Quellgrundlage für dieses DWH. Der integrierte Python-Loader greift standardmäßig auf das Ausgabe-Verzeichnis von `RetailDWGen` zu, um die CSV-Dateien hochperformant einzulesen.
 
 ---
 
-# Projektstruktur
+## Projektarchitektur
 
-```text
-RetailDWHPostgres/
+Die Datenverarbeitung erfolgt konsequent nach dem **ELT-Prinzip** (Extract, Load, Transform).
 
-│
-├── .env
-├── .env.example
-├── .gitignore
-├── pyproject.toml
-├── README.md
-├── README.de.md
-│
-├── archive/
-├── config/
-├── dbt/
-├── docs/
-├── loader/
-├── logs/
-├── orchestration/
-├── scripts/
-├── sql/
-├── src/
-└── tests/
-```
+RetailDWGen (Output)│▼ (CSV-Dateien)Loader (Python / psycopg3)│▼PostgreSQL (Schema: raw)│▼dbt stage│▼dbt intermediate│▼dbt mart
+Die Orchestrierung der einzelnen Verarbeitungsschritte sowie die Überwachung der Pipelines erfolgt später zentral über **Dagster**.
 
 ---
 
-# Python-Umgebung
+## Voraussetzungen
 
-Projektverzeichnis anlegen
+* **Python:** Version 3.10 oder höher
+* **PostgreSQL:** Version 15 oder höher (inkl. installierter Client-Bibliotheken für `psycopg3`)
+* **Datenbasis:** Ein lokales Verzeichnis mit generierten CSV-Daten aus dem Projekt `RetailDWGen`.
 
+---
+
+## Installation & Einrichtung
+
+### 1. Repository klonen & Verzeichnis betreten
 ```bash
-mkdir RetailDWHPostgres
+git clone <repository-url>
 cd RetailDWHPostgres
-```
-
-Git initialisieren
-
-```bash
-git init
-```
-
-Virtuelle Python-Umgebung erstellen
-
-```bash
-python3 -m venv .venv
-```
-
-Virtuelle Umgebung aktivieren
-
-```bash
+2. Virtuelle Python-Umgebung erstellen & aktivierenBashpython3 -m venv .venv
 source .venv/bin/activate
-```
-
-pip install -e .
-
-
-
-
-
-Python-Version prüfen
-
-```bash
-python --version
-```
-
-pip aktualisieren
-
-```bash
-python -m pip install --upgrade pip
-```
-
-## Python-Abhängigkeiten
-
-Installation der Projektabhängigkeiten:
-
-```bash
+3. Abhängigkeiten installierenBashpython -m pip install --upgrade pip
 pip install -r requirements.txt
-```
+pip install -e .
+Hinweis: Zur Dokumentation der exakt installierten Versionen kann anschließend pip freeze > requirements.lock ausgeführt werden.PostgreSQL-Konfiguration1. Projektbenutzer und Datenbank anlegenMelden Sie sich als PostgreSQL-Administrator an (sudo -u postgres psql) und führen Sie folgende SQL-Befehle aus:SQL-- Projektbenutzer erzeugen
+CREATE ROLE retaildwh WITH LOGIN PASSWORD '<lokales Passwort>';
 
-Anschließend können die tatsächlich installierten Versionen dokumentiert werden:
-
-```bash
-pip freeze > requirements.lock
-```
-
----
-
-# PostgreSQL
-
-## Projektbenutzer anlegen
-
-Als PostgreSQL-Administrator anmelden
-
-```bash
-sudo -u postgres psql
-```
-
-Projektbenutzer erzeugen
-
-```sql
-CREATE ROLE retaildwh
-WITH
-    LOGIN
-    PASSWORD '<lokales Passwort>';
-```
-
-## Datenbank anlegen
-
-```sql
-CREATE DATABASE "retailDWH"
-OWNER retaildwh
-ENCODING 'UTF8'
-TEMPLATE template0;
-```
-
-Mit der Datenbank verbinden
-
-```sql
-\c retailDWH
-```
-
----
-
-# Datenbankschemas
-
-Folgende Schemas werden angelegt.
-
-```sql
-CREATE SCHEMA raw          AUTHORIZATION retaildwh;
+-- Datenbank anlegen
+CREATE DATABASE "retailDWH" OWNER retaildwh ENCODING 'UTF8';
+2. Datenbankschemas initialisierenVerbinden Sie sich mit der neuen Datenbank (\c retailDWH) und legen Sie die DWH-Schichten an:SQLCREATE SCHEMA raw          AUTHORIZATION retaildwh;
 CREATE SCHEMA stage        AUTHORIZATION retaildwh;
 CREATE SCHEMA intermediate AUTHORIZATION retaildwh;
 CREATE SCHEMA mart         AUTHORIZATION retaildwh;
 CREATE SCHEMA control      AUTHORIZATION retaildwh;
-```
-
-## Bedeutung der Schemas
-
-| Schema       | Aufgabe                                                     |
-| ------------ | ----------------------------------------------------------- |
-| raw          | Unveränderte Quelldaten (Landing Zone)                      |
-| stage        | Technische Bereinigung und Standardisierung                 |
-| intermediate | Wiederverwendbare fachliche Zwischenergebnisse              |
-| mart         | Fachliches Data-Warehouse-Modell für Reporting und Analysen |
-| control      | Ladehistorie, Scheduler, Monitoring und Metadaten           |
-
----
-
-# Konfiguration
-
-## config/config.yaml
-
-Enthält die allgemeine Projektkonfiguration.
-
-Beispiele:
-
-* Projektinformationen
-* Verzeichnisse
-* Datenbankschemas
-* Loader-Konfiguration
-* Logging
-
-Passwörter und Zugangsdaten werden **nicht** in dieser Datei gespeichert.
-
-## .env
-
-Die Datei `.env` enthält ausschließlich lokale Zugangsdaten und wird nicht versioniert.
-
-Sie ist in `.gitignore` eingetragen.
-
-Die Datei `.env.example` dient als Vorlage.
-
----
-
-# Projektstand
-
-Aktuell umgesetzt
-
-* Git-Projekt erstellt
-* Virtuelle Python-Umgebung eingerichtet
-* PostgreSQL-Datenbank erstellt
-* Projektbenutzer erstellt
-* Data-Warehouse-Schemas definiert
-* Grundstruktur des Projektes geplant
-* Konfigurationsdateien vorbereitet
-
----
-
-# Nächste Schritte
-
-* Python-Projektstruktur aufbauen
-* Konfigurationsverwaltung entwickeln
-* Verbindung zu PostgreSQL herstellen
-* CSV-Loader entwickeln
-* Ladehistorie implementieren
-* Dagster integrieren
-* dbt-Projekt integrieren
-* GitHub-Repository erstellen
-
+Bedeutung der SchemasSchemaAufgabeBeschreibungrawLanding ZoneUnveränderte Quelldaten. Es erfolgen keinerlei Transformationen. Befüllung erfolgt ausschließlich via High-Speed-COPY durch den Loader.stageTechnische BereinigungVereinheitlichung von Datentypen, Feldnamen und Formaten. Qualitätsprüfungen. (Exklusiv über dbt verwaltet).intermediateZwischenergebnisseWiederverwendbare, komplexe Joins und Aggregationen, die von mehreren Modellen genutzt werden. (Exklusiv über dbt verwaltet).martCore-ModellFachliches Data-Warehouse-Modell (Dimensionen und Faktentabellen) für Reporting und BI. (Exklusiv über dbt verwaltet).controlMetadaten & SteuerungEnthält Ladehistorie, Jobstatus, Scheduler-Informationen und Fehlerprotokolle.ProjektstrukturRetailDWHPostgres/
+│
+├── .env                 # Lokale Umgebungsvariablen (nicht versioniert)
+├── .env.example         # Vorlage für Umgebungsvariablen
+├── .gitignore           # Git-Ausschlussregeln
+├── pyproject.toml       # Projektspezifikationen (v0.3.0)
+├── requirements.txt     # Python-Abhängigkeiten
+├── requirements.lock    # Fixierte Paketversionen
+├── README.md            # Englische Dokumentation (geplant)
+├── README.de.md         # Diese Dokumentation
+│
+├── archive/             # Verzeichnis für verarbeitete Quellmedien
+├── config/              # Konfigurationsdateien (config.yaml)
+├── dbt/                 # dbt-Transformationsmodelle
+├── docs/                # Projektdokumentation
+├── loader/              # Logik der Lade-Engine
+├── logs/                # System- und Lade-Protokolle
+├── orchestration/       # Dagster-Pipelines und Repositories
+├── scripts/             # Hilfsskripte für Administration und Deployment
+├── sql/                 # Reine SQL-Skripte und DDLs
+├── src/                 # Python-Quellcode des Projekts (retaildwh)
+└── tests/               # Test-Suiten für Pipeline-Komponenten
+Konfigurationconfig/config.yamlEnthält die allgemeine, nicht-sensitive Projektkonfiguration sowie die Pfade zu den Datenquellen:YAMLpaths:
+  csv_source: ~/Projekte/RetailDWGen/output   # Pfad zum Generator-Output
+  archive: ./archive
+Hinweis: Tilde-Pfade (~) werden vom Loader automatisch in das absolute Benutzerverzeichnis aufgelöst..envEnthält ausschließlich lokale, sensitive Zugangsdaten (Host, Port, Passwörter) und wird niemals in Git versioniert. Nutzen Sie .env.example als Vorlage.Verwendung des LoadersUm den Import einer bestimmten Entität aus den Quell-Stammdaten in den raw-Layer der PostgreSQL-Datenbank zu starten, führen Sie die load.py mit dem entsprechenden Pfad-Argument aus:Bashpython load.py csv stammdaten/artikel
+Der Loader ermittelt automatisch die neueste CSV-Datei im Quellpfad, prüft die Struktur, erstellt die Ziel-Tabelle im Schema raw dynamisch, falls diese noch nicht existiert, und schreibt die Daten via ultraschnellem psycopg3-Schreibstream (COPY). Nach erfolgreichem Laden wird die Datei automatisch ins Archiv verschoben.ProjektstandAktuell umgesetzt (v0.3.0)[x] Virtuelle Python-Umgebung & modernisierte Paketstruktur eingerichtet.[x] PostgreSQL-Datenbankstruktur sowie DWH-Zielschemas definiert.[x] Konfigurationsverwaltung über config.yaml und .env implementiert.[x] High-Speed-CSV-Loader fertiggestellt: Dynamische Tabellenerstellung im raw-Layer sowie performanter Daten-Streaming-Import via nativem psycopg3 COPY implementiert.[x] Automatische dateibasierte Archivierung nach erfolgreichem Daten-Commit integriert.Nächste Schritte[ ] Erweiterung der Ladehistorie und Jobsteuerung im control-Schema.[ ] dbt-Projekt für die Transformationen (stage -> intermediate -> mart) initialisieren.[ ] Dagster zur Orchestrierung der gesamten ELT-Pipeline einbinden.AutorDetlef BrackerRetailDWHPostgres ist ein Open-Source-Projekt zur Demonstration moderner Softwareentwicklung, relationaler Datenmodellierung sowie Data-Warehouse-Architekturen im Handelsumfeld.LizenzDieses Projekt steht unter der MIT License.Copyright © Detlef BrackerWeitere Informationen befinden sich in der Datei LICENSE.
