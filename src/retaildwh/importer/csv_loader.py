@@ -75,7 +75,11 @@ class CSVLoader:
             files = [
                 os.path.join(final_search_dir, f) 
                 for f in os.listdir(final_search_dir) 
-                if f.endswith('.csv') and f.startswith(f"{entity}_")
+                if (
+                    f.endswith('.csv') 
+                    and not f.endswith("_check.csv")
+                    and f.startswith(f"{entity}_")
+                )
             ]
             if files:
                 file_path = max(files, key=os.path.getmtime)
